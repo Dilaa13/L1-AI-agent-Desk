@@ -1,5 +1,5 @@
 // 1) Put your n8n webhook URL here
-const N8N_WEBHOOK_URL = "https://sltrnddigitallab.app.n8n.cloud/webhook/it-agent-chat";
+const N8N_WEBHOOK_URL = "http://localhost:3000/chat";
 
 // 2) Basic elements
 const $messages = document.getElementById("messages");

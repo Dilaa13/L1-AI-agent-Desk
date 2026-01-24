@@ -1,6 +1,18 @@
 const express = require("express");
+const cors = require("cors");
 
 const app = express();
+
+// Allow requests from your web page (127.0.0.1:5500)
+app.use(cors({
+  origin: "http://127.0.0.1:5500",
+  methods: ["POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
+// Handle preflight requests
+app.options("/chat", cors());
+
 app.use(express.json());
 
 // Put your n8n production webhook URL here
@@ -16,7 +28,6 @@ app.post("/chat", async (req, res) => {
 
     const text = await response.text();
 
-    // pass through status + body
     res.status(response.status);
     res.set("Content-Type", response.headers.get("content-type") || "application/json");
     res.send(text);
