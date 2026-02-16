@@ -1,39 +1,85 @@
 const express = require("express");
 const cors = require("cors");
 
+// ✅ Make fetch work in ALL Node versions
+// Node 18+ has global fetch. Older versions need node-fetch.
+let fetchFn = global.fetch;
+if (!fetchFn) {
+  fetchFn = (...args) =>
+    import("node-fetch").then(({ default: fetch }) => fetch(...args));
+}
+
 const app = express();
 
 // Allow requests from your web page (127.0.0.1:5500)
-app.use(cors({
-  origin: "http://127.0.0.1:5500",
-  methods: ["POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"]
-}));
+app.use(
+  cors({
+    origin: "http://127.0.0.1:5500",
+    methods: ["POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Accept"],
+  })
+);
 
-// Handle preflight requests
+// IMPORTANT: parse JSON body (must be BEFORE app.post)
+app.use(express.json({ limit: "1mb" }));
+
+// Handle preflight
 app.options("/chat", cors());
 
-app.use(express.json());
-
-// Put your n8n production webhook URL here
-const N8N_WEBHOOK_URL = "https://sltrnddigitalab.app.n8n.cloud/webhook/it-agent-chat";
+// Put your n8n PRODUCTION webhook URL here (double-check spelling)
+const N8N_WEBHOOK_URL =
+  "https://sltrnddigitallab.app.n8n.cloud/webhook/it-agent-chat";
 
 app.post("/chat", async (req, res) => {
   try {
-    const response = await fetch(N8N_WEBHOOK_URL, {
+    // 1) Log what came from the browser
+    console.log("\n---- /chat hit ----");
+    console.log("Incoming headers content-type:", req.headers["content-type"]);
+    console.log("Incoming body:", req.body);
+
+    // 2) Forward to n8n
+    const n8nRes = await fetchFn(N8N_WEBHOOK_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(req.body ?? {}),
     });
 
-    const text = await response.text();
+    const raw = await n8nRes.text();
 
-    res.status(response.status);
-    res.set("Content-Type", response.headers.get("content-type") || "application/json");
-    res.send(text);
+    // 3) Log what came back from n8n
+    console.log("n8n status:", n8nRes.status);
+    console.log("n8n raw length:", raw.length);
+    console.log("n8n raw (first 300 chars):", raw.slice(0, 300));
+
+    // 4) If n8n returned empty, send a helpful JSON error (NOT empty)
+    if (!raw || raw.trim() === "") {
+      return res.status(502).json({
+        replyText: "n8n returned an empty response body.",
+        debug: {
+          n8nStatus: n8nRes.status,
+          note:
+            "Your n8n workflow did not send a response. Make sure every branch ends in a Respond to Webhook node and that it returns JSON.",
+        },
+      });
+    }
+
+    // 5) Return JSON if possible, else return raw text
+    try {
+      const json = JSON.parse(raw);
+      return res.status(n8nRes.status).json(json);
+    } catch {
+      res.set("Content-Type", "text/plain; charset=utf-8");
+      return res.status(n8nRes.status).send(raw);
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ replyText: "Proxy error: could not reach n8n." });
+    console.error("Proxy error:", err);
+    return res.status(500).json({
+      replyText: "Proxy error: could not reach n8n.",
+      error: String(err?.message || err),
+    });
   }
 });
 

@@ -1,5 +1,5 @@
-// 1) Put your n8n webhook URL here
-const N8N_WEBHOOK_URL = "http://localhost:3000/chat";
+// 1) Put your n8n PRODUCTION webhook URL here (from the Webhook node)
+const N8N_WEBHOOK_URL = "https://sltrnddigitallab.app.n8n.cloud/webhook/it-agent-chat";
 
 // 2) Basic elements
 const $messages = document.getElementById("messages");
@@ -10,7 +10,6 @@ const $error = document.getElementById("error");
 const $chips = document.getElementById("chips");
 
 // 3) Session and user identity (simple version)
-// In a real portal, userId should come from login (SSO). This is a placeholder.
 function getSessionId() {
   let id = localStorage.getItem("it_agent_session");
   if (!id) {
@@ -63,6 +62,15 @@ function setChips(suggestions) {
   });
 }
 
+// n8n sometimes returns an array of items. This normalizes it to a single object.
+function normalizeN8nResponse(data) {
+  if (Array.isArray(data)) {
+    // n8n "Respond to Webhook" can return [{...}] depending on settings
+    return data[0] ?? {};
+  }
+  return data ?? {};
+}
+
 async function callWebhook(messageText) {
   const payload = {
     userId: getUserId(),
@@ -74,17 +82,32 @@ async function callWebhook(messageText) {
 
   const res = await fetch(N8N_WEBHOOK_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
     body: JSON.stringify(payload)
   });
 
+  const rawText = await res.text();
+
   if (!res.ok) {
-    throw new Error("Webhook request failed with HTTP " + res.status);
+    const snippet = rawText ? rawText.slice(0, 300) : "(empty body)";
+    throw new Error(`Webhook request failed (HTTP ${res.status}). ${snippet}`);
   }
 
-  // Expected response:
-  // { replyText: "...", suggestions: ["Yes", "No"], type: "kb_suggestion", data: {...} }
-  return await res.json();
+  if (!rawText || rawText.trim() === "") {
+    throw new Error("Webhook returned an empty response body (no JSON).");
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    throw new Error("Webhook did not return JSON. First 300 chars: " + rawText.slice(0, 300));
+  }
+
+  return normalizeN8nResponse(parsed);
 }
 
 async function sendMessage() {
@@ -103,17 +126,14 @@ async function sendMessage() {
   try {
     const data = await callWebhook(text);
 
-    const reply = data.replyText || "No replyText returned from n8n.";
+    const replyText = String(data.replyText ?? "");
+    const reply = replyText.replace(/^=\s*/, "").trim() || "No replyText returned from n8n.";
+
     addMessage("bot", reply);
 
-    setChips(data.suggestions || []);
+    setChips(Array.isArray(data.suggestions) ? data.suggestions : []);
 
-    // Optional debug line
-    if (data.type) {
-      $meta.textContent = "Last response type: " + data.type;
-    } else {
-      $meta.textContent = "";
-    }
+    $meta.textContent = data.type ? "Last response type: " + data.type : "";
   } catch (e) {
     addMessage("bot", "I could not reach the help desk service. Try again.");
     $error.textContent = String(e.message || e);
